@@ -235,3 +235,40 @@ func commentPost(tx *sqlx.Tx, comment Comment) error {
 
 	return nil
 }
+
+// DeleteComment deletes a comment belonging to the user from a post.
+func DeleteComment(w http.ResponseWriter, r *http.Request) {
+	user, ok := user.FromContext(r.Context())
+	if !ok {
+		respondError(w, http.StatusUnauthorized, errors.New("DeleteComment: not authenticated"))
+		return
+	}
+
+	postIDParam := chi.URLParam(r, "post_id")
+	postID, err := strconv.ParseUint(postIDParam, 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	commentIDParam := chi.URLParam(r, "comment_id")
+	commentID, err := strconv.ParseUint(commentIDParam, 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	res, err := app.db.Exec("delete from comments where post_id=? and id=? and user_id=?", postID, commentID, user.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Return not found. Best effort, ignore error.
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		respondError(w, http.StatusNotFound, errors.New("error deleting comment: not found"))
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}

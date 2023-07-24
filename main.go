@@ -74,9 +74,7 @@ func main() {
 		})
 		r.Post("/", PostImage)
 		r.Post("/{post_id}/comments", CommentPost)
-		r.Delete("/{post_id}/comments/{comment_id}", func(w http.ResponseWriter, r *http.Request) {
-			//delete my comment on post
-		})
+		r.Delete("/{post_id}/comments/{comment_id}", DeleteComment)
 	})
 
 	if err := http.ListenAndServe(":8080", r); err != nil {
