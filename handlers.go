@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"image"
@@ -17,6 +18,8 @@ import (
 	"strconv"
 
 	"github.com/Jiraffe7/imgram/user"
+	"github.com/go-chi/chi/v5"
+	"github.com/jmoiron/sqlx"
 	"golang.org/x/image/bmp"
 	"golang.org/x/image/draw"
 )
@@ -41,6 +44,12 @@ type Post struct {
 	UserID   uint64 `db:"user_id"`
 	Caption  string
 	Filepath string
+}
+
+type Comment struct {
+	PostID uint64 `db:"post_id"`
+	UserID uint64 `db:"user_id"`
+	Text   string
 }
 
 // Create a post with at most one image and a caption
@@ -107,7 +116,9 @@ func readCaption(part *multipart.Part) (string, error) {
 	return caption.String(), nil
 }
 
-// readFile reads the file from the part up to a limit of FileLimitBytes.
+// readFile reads the file from the part up to a limit of FileLimitBytes,
+// converts the resolution into 600x600, and saves the image to a file on disk.
+// Supports .jpg, .png, .bmp formats.
 func readFile(part *multipart.Part, userID uint64) (string, error) {
 	var (
 		dataDir  = app.dataDir
@@ -159,4 +170,68 @@ func readFile(part *multipart.Part, userID uint64) (string, error) {
 	}
 
 	return filepath, nil
+}
+
+// CommentPost creates a comment on a post.
+func CommentPost(w http.ResponseWriter, r *http.Request) {
+	user, ok := user.FromContext(r.Context())
+	if !ok {
+		respondError(w, http.StatusUnauthorized, errors.New("CommentPost: not authenticated"))
+		return
+	}
+
+	postIDParam := chi.URLParam(r, "post_id")
+	postID, err := strconv.ParseUint(postIDParam, 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	lr := io.LimitReader(r.Body, CaptionLimitBytes)
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, lr)
+	if err != nil && !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	comment := Comment{
+		PostID: postID,
+		UserID: user.ID,
+		Text:   buf.String(),
+	}
+
+	tx, err := app.db.Beginx()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+
+	err = commentPost(tx, comment)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondError(w, http.StatusNotFound, err)
+		}
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	tx.Commit()
+}
+
+func commentPost(tx *sqlx.Tx, comment Comment) error {
+	rows, err := tx.Queryx("select * from posts where id=? for share", comment.PostID)
+	if err != nil {
+		return err
+	}
+	rows.Close()
+
+	_, err = tx.NamedExec("insert into comments (post_id, user_id, text) values (:post_id, :user_id, :text)", comment)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -73,9 +73,7 @@ func main() {
 			// list posts with last 2 comments for each post
 		})
 		r.Post("/", PostImage)
-		r.Post("/{post_id}/comments", func(w http.ResponseWriter, r *http.Request) {
-			//comment on post
-		})
+		r.Post("/{post_id}/comments", CommentPost)
 		r.Delete("/{post_id}/comments/{comment_id}", func(w http.ResponseWriter, r *http.Request) {
 			//delete my comment on post
 		})
