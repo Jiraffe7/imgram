@@ -73,6 +73,10 @@ func main() {
 			// list posts with last 2 comments for each post
 		})
 		r.Post("/", PostImage)
+		r.Get("/{post_id}", func(w http.ResponseWriter, _ *http.Request) {
+			//TODO: get image for specific post
+			w.WriteHeader(http.StatusNotImplemented)
+		})
 		r.Post("/{post_id}/comments", CommentPost)
 		r.Delete("/{post_id}/comments/{comment_id}", DeleteComment)
 	})
