@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -40,6 +42,13 @@ func main() {
 	}
 
 	// init database
+	opts := []string{
+		"parseTime=true",
+	}
+	if len(opts) > 0 {
+		dsn = fmt.Sprintf("%s?%s", dsn, strings.Join(opts, "&"))
+	}
+
 	db, err := sqlx.Connect("mysql", dsn)
 	if err != nil {
 		log.Printf("database: open error: %v\n", err)
@@ -69,9 +78,7 @@ func main() {
 
 	r.Route("/posts", func(r chi.Router) {
 		r.Use(UserAuth)
-		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-			// list posts with last 2 comments for each post
-		})
+		r.Get("/", ListPosts)
 		r.Post("/", PostImage)
 		r.Get("/{post_id}", func(w http.ResponseWriter, _ *http.Request) {
 			//TODO: get image for specific post

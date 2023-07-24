@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"time"
 
 	"github.com/Jiraffe7/imgram/user"
 	"github.com/go-chi/chi/v5"
@@ -30,8 +32,9 @@ const (
 )
 
 type Response struct {
-	Data  any    `json:"data"`
-	Error string `json:"error"`
+	Data   any    `json:"data"`
+	Cursor uint   `json:"cursor"`
+	Error  string `json:"error"`
 }
 
 func respondError(w http.ResponseWriter, status int, err error) {
@@ -271,4 +274,113 @@ func DeleteComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// ListPosts returns a list of posts ordered by time (recent posts first),
+// with 2 most recent comments for each post.
+func ListPosts(w http.ResponseWriter, r *http.Request) {
+	type Post struct {
+		ID        uint64
+		UserID    uint64 `db:"user_id"`
+		Caption   string
+		Filepath  string
+		CreatedAt time.Time `db:"created_at"`
+	}
+
+	type Comment struct {
+		ID     *uint64 `db:"comment_id"`
+		UserID *uint64 `db:"comment_user_id"`
+		Text   *string
+	}
+
+	type PostComment struct {
+		Post
+		Comment
+	}
+
+	type PostAggregate struct {
+		Post
+		Comments []Comment
+	}
+
+	const DefaultPageLimit = 10
+
+	limit := DefaultPageLimit
+	limitParam := r.URL.Query().Get("limit")
+	if val, err := strconv.ParseInt(limitParam, 10, 64); err == nil && val > 0 {
+		limit = int(val)
+	}
+
+	cursor := 0
+	cursorParam := r.URL.Query().Get("cursor")
+	if val, err := strconv.ParseInt(cursorParam, 10, 64); err == nil && val > 0 {
+		cursor = int(val)
+	}
+
+	pcs := make([]PostComment, 0, limit)
+	queryTemplate := `
+select id, user_id, caption, filepath, created_at, comment_id, comment_user_id, text from (
+	select posts.*, comments.id as comment_id, comments.user_id as comment_user_id, comments.text,
+	row_number() over (partition by posts.id order by comments.created_at desc) as n from (
+		select * from posts 
+		%s order by id desc limit ?
+	) as posts
+	left join comments on posts.id=comments.post_id
+	order by posts.id desc
+) as x 
+where n <= 2;
+`
+	var (
+		where = ""
+		args  []any
+	)
+	if cursor > 0 {
+		where = "where id < ?"
+		args = append(args, cursor)
+	}
+	query := fmt.Sprintf(queryTemplate, where)
+	args = append(args, limit)
+
+	err := app.db.Select(&pcs, query, args...)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	aggregate := make([]PostAggregate, 0, len(pcs))
+	for _, pc := range pcs {
+		var comment *Comment
+		if pc.Comment.ID != nil {
+			comment = &Comment{
+				ID:     pc.Comment.ID,
+				UserID: pc.Comment.UserID,
+				Text:   pc.Text,
+			}
+		}
+		if len(aggregate) == 0 || aggregate[len(aggregate)-1].ID != pc.Post.ID {
+			p := Post{
+				ID:        pc.Post.ID,
+				UserID:    pc.Post.UserID,
+				Caption:   pc.Caption,
+				Filepath:  pc.Filepath,
+				CreatedAt: pc.CreatedAt,
+			}
+			pa := PostAggregate{
+				Post: p,
+			}
+			aggregate = append(aggregate, pa)
+		}
+		curr := &aggregate[len(aggregate)-1]
+		if comment != nil {
+			curr.Comments = append(curr.Comments, *comment)
+		}
+	}
+
+	next := uint(0)
+	if len(aggregate) > 0 {
+		next = uint(aggregate[len(aggregate)-1].ID)
+	}
+
+	enc := json.NewEncoder(w)
+	enc.Encode(Response{Data: aggregate, Cursor: next})
 }
